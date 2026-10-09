@@ -1,9 +1,7 @@
 # Guide: Laufbursche CITYBOSS unlock
 
-> **Feasibility study.** This tool shows what the Bluetooth protocol of these scooters makes possible.
-> It is not a finished product. Error-free operation is not promised and there is no warranty. Whatever
-> you do with it, you do at your own risk and on your own vehicle only.
-
+> **Feasibility study.** This tool shows what the Bluetooth protocol of these scooters makes possible. It is not a finished product. Error-free operation is not promised and there is no warranty. Whatever you do with it, you do at your own risk and on your own vehicle only.
+>
 > **Important for error reports:** switch on the **Diagnostic log** at the bottom of the page *before* you connect to the scooter. Only then is the full connection handshake captured - and those are exactly the lines we need in a [ticket](https://github.com/Laufbursche42/Laufbursche42/issues) to reproduce a problem.
 
 ## 1. What you need

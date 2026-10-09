@@ -1,9 +1,7 @@
 # Anleitung: Laufbursche CITYBOSS unlock
 
-> **Machbarkeitsstudie.** Dieses Werkzeug zeigt, was das Bluetooth-Protokoll dieser Scooter möglich
-> macht. Es ist kein fertiges Produkt. Ein fehlerfreier Betrieb wird nicht zugesichert und es gibt
-> keine Gewähr. Was immer du damit tust, tust du auf eigenes Risiko und nur am eigenen Fahrzeug.
-
+> **Machbarkeitsstudie.** Dieses Werkzeug zeigt, was das Bluetooth-Protokoll dieser Scooter möglich macht. Es ist kein fertiges Produkt. Ein fehlerfreier Betrieb wird nicht zugesichert und es gibt keine Gewähr. Was immer du damit tust, tust du auf eigenes Risiko und nur am eigenen Fahrzeug.
+>
 > **Wichtig für Fehler-Reports:** Schalte unten auf der Seite den **Diagnose-Log** ein, *bevor* du dich mit dem Scooter verbindest. Nur dann wird der komplette Verbindungsaufbau mitgeschnitten - und genau diese Zeilen brauchen wir in einem [Ticket](https://github.com/Laufbursche42/Laufbursche42/issues), um ein Problem nachzuvollziehen.
 
 ## 1. Was du brauchst
