@@ -1,0 +1,10 @@
+{
+  "id": "cityboss",
+  "titleFallback": "Laufbursche CITYBOSS Tool",
+  "sourceUrl": "https://github.com/Laufbursche42/cityboss-unlock",
+  "buildVer": 1,
+  "connectSrc": [],
+  "bodyFile": "body.html",
+  "extraScripts": [],
+  "extraDialogsFile": null
+}
