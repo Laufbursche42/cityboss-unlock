@@ -3,7 +3,7 @@
 // Shell (header, footer, i18n, theme, doc viewer, anonymized log) matches the Laufbursche tool family;
 // the BLE protocol is the proven CITYBOSS frame engine: 55 AA LEN opcode REG payload CK_LO CK_HI, with
 // a 4-digit app PIN mixed into the checksum via reversible XOR (recovered elsewhere, not here).
-const BUILD = 'v2';
+const BUILD = 'v1';
 
 // =====================================================================================
 // CITYBOSS BLE protocol (ground truth - do not reinvent)
