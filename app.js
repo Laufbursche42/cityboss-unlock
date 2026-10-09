@@ -3,7 +3,7 @@
 // Shell (header, footer, i18n, theme, doc viewer, anonymized log) matches the Laufbursche tool family;
 // the BLE protocol is the proven CITYBOSS frame engine: 55 AA LEN opcode REG payload CK_LO CK_HI, with
 // a 4-digit app PIN mixed into the checksum via reversible XOR (recovered elsewhere, not here).
-const BUILD = 'v1';
+const BUILD = 'v2';
 
 // =====================================================================================
 // CITYBOSS BLE protocol (ground truth - do not reinvent)
@@ -398,8 +398,9 @@ function wire(){
   $('btn-copy-log').addEventListener('click', () => navigator.clipboard.writeText(logText()).then(() => logSys('log copied')).catch(() => {}));
   $('btn-clear-log').addEventListener('click', () => { logBuffer = []; const el = $('log'); if (el) el.textContent = ''; logDiagnosticHeader(); });
   $('btn-save-log').addEventListener('click', saveLog);
-  { const pl = $('public-log'); if (pl) { pl.checked = publicLog; pl.addEventListener('change', () => { publicLog = pl.checked; try { localStorage.setItem(LS.PUBLOG, publicLog ? '1' : '0'); } catch (e) {} renderLog(); }); } }
-  { const dg = $('diag-log'); if (dg) dg.addEventListener('change', () => { diag = dg.checked; }); }
+  { const pl = $('public-log'); if (pl) { pl.checked = publicLog; pl.addEventListener('change', () => { publicLog = pl.checked; try { localStorage.setItem(LS.PUBLOG, publicLog ? '1' : '0'); } catch (e) {} logSys('public-log: ' + (publicLog ? 'on (anonymizing device name/id)' : 'off')); renderLog(); }); } }
+  { const dg = $('diag-log'); if (dg) dg.addEventListener('change', () => { diag = dg.checked; logSys('diag-log: ' + (diag ? 'on' : 'off')); }); }
+  { const sa = $('showall'); if (sa) sa.addEventListener('change', () => { logSys('show-all-frames: ' + (sa.checked ? 'on' : 'off')); renderLog(); }); }
 
   document.querySelectorAll('.help-btn').forEach(btn => btn.addEventListener('click', () => openHelp(btn.getAttribute('data-help'))));
   ['help-x', 'help-close'].forEach(id => { const b = $(id); if (b) b.addEventListener('click', closeHelp); });
