@@ -19,7 +19,7 @@
     </div>
     <div class="set-row">
       <label for="pin-in" data-t="pinLabel"></label>
-      <input type="text" id="pin-in" inputmode="numeric" pattern="\d{4}" maxlength="4" placeholder="0000">
+      <input type="text" id="pin-in" inputmode="numeric" pattern="\d{4,6}" maxlength="6" placeholder="000000">
     </div>
     <p class="hint" data-t="pinHint"></p>
     <div class="btns">
@@ -78,7 +78,7 @@
     <div class="btns"><button class="span2" id="btn-writereg" data-t="btnWriteReg" disabled></button></div>
 
     <h3 class="set-group" data-t="eRaw"></h3>
-    <input type="text" id="raw-hex" class="raw-in" placeholder="55 AA 06 70 EF 00 ...">
+    <input type="text" id="raw-hex" class="raw-in" placeholder="55 AA 04 20 03 EF ...">
     <div class="btns">
       <button id="btn-raw" data-t="btnRaw" disabled></button>
       <button id="btn-raw-plain" data-t="btnRawPlain" disabled></button>

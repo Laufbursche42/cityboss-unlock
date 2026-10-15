@@ -19,8 +19,8 @@ window.I18N = {
     ownDevice: "Nur am eigenen Fahrzeug auf privatem Gelände. Das Anheben der Höchstgeschwindigkeit hebt die Drossel auf, die ABE erlischt und der Betrieb auf öffentlichen Wegen ist dann nicht erlaubt.",
 
     s2Title: "Verbindung",
-    pinLabel: "App-PIN (4 Ziffern)",
-    pinHint: "CITYBOSS prüft jedes Schreib-Frame mit einer 4-stelligen PIN, die in der Original-App gesetzt wurde. Standard ab Werk ist meist 0000. Ohne richtige PIN akzeptiert der Scooter keine Schreib-Kommandos.",
+    pinLabel: "App-Code (bis zu 6 Ziffern)",
+    pinHint: "CITYBOSS prüft jedes Schreib-Frame mit dem Code aus der Original-App - gib deinen 6-stelligen Code hier ein (intern zählen die letzten 4 Ziffern). Wurde nie ein Code gesetzt, ist er oft 0. Ohne richtigen Code lehnt der Scooter Schreib-Kommandos ab.",
     btnConnect: "Verbinden",
     btnDisconnect: "Trennen",
     controlsHint: "Web Bluetooth geht auf dem iPhone nur über die App Bluefy, auf Android oder Desktop über Chrome bzw. Edge. Beim ersten Mal fragt das System nach der Kopplung.",
@@ -115,8 +115,8 @@ window.I18N = {
     ownDevice: "Only on your own vehicle on private ground. Raising the top speed removes the throttle limit, the type approval lapses and riding on public roads is then not allowed.",
 
     s2Title: "Connection",
-    pinLabel: "App PIN (4 digits)",
-    pinHint: "CITYBOSS verifies every write frame with the 4-digit PIN set in the official app. Factory default is usually 0000. Without the right PIN the scooter will not accept any write commands.",
+    pinLabel: "App code (up to 6 digits)",
+    pinHint: "CITYBOSS verifies every write frame with the code from the official app - enter your 6-digit code here (internally the last 4 digits count). If one was never set it is often 0. Without the right code the scooter will not accept any write commands.",
     btnConnect: "Connect",
     btnDisconnect: "Disconnect",
     controlsHint: "Web Bluetooth only works through the Bluefy app on iPhone; on Android or desktop use Chrome or Edge. The first time, the system asks to pair.",

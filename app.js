@@ -1,9 +1,9 @@
 'use strict';
 // Laufbursche CITYBOSS Tool - a Web Bluetooth client for the lebitec/CITYBOSS BLE protocol family.
 // Shell (header, footer, i18n, theme, doc viewer, anonymized log) matches the Laufbursche tool family;
-// the BLE protocol is the proven CITYBOSS frame engine: 55 AA LEN opcode REG payload CK_LO CK_HI, with
-// a 4-digit app PIN mixed into the checksum via reversible XOR (recovered elsewhere, not here).
-const BUILD = 'v4';
+// the BLE protocol is the proven CITYBOSS frame engine: 55 AA LEN OPCODE DIR REG payload CK_LO CK_HI,
+// with the app code (6 digits typed, last 4 = atoi mod 10000) mixed 16-bit into the checksum (XOR).
+const BUILD = 'v5';
 
 // =====================================================================================
 // CITYBOSS BLE protocol (ground truth - do not reinvent)
@@ -25,16 +25,19 @@ const ALL_SERVICES = [...new Set(TRANSPORTS.map(t=>t.service))];
 // Advertised-name prefixes commonly used by lebitec OEM scooter models (CITYBOSS and siblings).
 const SCAN_PREFIXES = ['CITYBOSS','CITY','CB','LB','LE','V5','M0','M1','Mini','GoKart','TECAR','EO','E12','E9'];
 
-// --------------------------- register map ---------------------------
-// Writer opcodes: 0x70 is TR_TOUCH (the main register write via Bluetooth::OnTouchUpdate @0x483ebc).
-// Speed-limit registers: 0xEF/0xF0/0xF1 are level 1 (mode-dependent), 0xF3 is level 3 (slider*1000+5000).
-// Lock variants: 0x70 and 0x71 (TriggerLogic::onClickLock @0x47bbd4) or variant bytes 0xB2/0x1D/0x44/6.
-const OPCODE_TOUCH = 0x70;
+// --------------------------- register map + write opcodes ---------------------------
+// Verified from libcpp_empty_test.so: a write frame carries OPCODE DIR(0x03) REG payload, where OPCODE
+// depends on the helper - SendWriteCmd_HB @0x482650 uses 0x20 (speed-limit sliders), generic
+// SendWriteCmd @0x4820b8 uses 0x06 (lock/unlock). Speed registers: 0xEF/0xF0/0xF1 level 1
+// (mode-dependent, value = km/h), 0xF3 level 3 (km/h*1000+5000). Lock/unlock: 0x70/0x71.
+const OP_WRITE    = 0x06;   // generic SendWriteCmd (lock/unlock)
+const OP_WRITE_HB = 0x20;   // SendWriteCmd_HB (speed-limit + register writes)
+const DIR_WRITE   = 0x03;
 const REG_LIMIT_SPEED1_A = 0xEF;
 const REG_LIMIT_SPEED1_B = 0xF0;
 const REG_LIMIT_SPEED1_C = 0xF1;
 const REG_LIMIT_SPEED3   = 0xF3;
-const REG_LOCK   = 0x70;   // same byte as the opcode: the register address 0x70 toggles lock on default variants
+const REG_LOCK   = 0x70;   // onClickLock @0x47bbd4 writes 0x70/0x71 via generic SendWriteCmd (opcode 0x06)
 const REG_UNLOCK = 0x71;
 const SPEED_TARGETS = [
   { reg:REG_LIMIT_SPEED1_A, mul:1,    add:0,    label:'LimitSpeed1 mode A (0xEF, direct)' },
@@ -44,23 +47,21 @@ const SPEED_TARGETS = [
 ];
 
 // --------------------------- frame engine ---------------------------
-// Checksum = one's complement of the 16-bit byte sum starting at LEN (offset 2), then both bytes XORed
-// with a PIN-derived mixing byte. The PIN mixing is reversible algebra from the research; without the
-// right PIN the device rejects the frame. We mix the low 8 bits of (PIN) into both checksum bytes as
-// documented in Bluetooth::SendFramePack (@0x48145c-0x481d7c). An exact per-byte lookup is not shipped
-// in the public research, so a captured valid frame remains the ground-truth check for PIN correctness.
-function pinByte(pin){ return (pin >>> 0) & 0xff; }
+// Verified from Bluetooth::SendFramePack @0x48145c: 55 AA LEN OPCODE DIR REG payload CK_LO CK_HI, with
+// LEN = payload.length + 2. Checksum = ones-complement of the 16-bit byte sum from offset 2 (LEN), then
+// the 16-bit app code XORed in per byte (lo^code_lo, hi^code_hi); ParseFrame compares the same. The code
+// is the value the owner set in the app, reduced to atoi mod 10000 (0..9999) = its last four digits.
 function checksum16(bytes, from){
   let s=0; for(let i=from;i<bytes.length;i++) s=(s+bytes[i])&0xffff;
   return (~s)&0xffff;
 }
 function buildFrame(opcode, reg, payload, pin){
   payload = payload || [];
-  const len = payload.length + 2;                     // LEN counts REG + payload + nothing else here
-  const f = [0x55, 0xAA, len, opcode, reg, ...payload];
+  const len = (payload.length + 2) & 0xff;            // device LEN field = payload bytes + 2
+  const f = [0x55, 0xAA, len, opcode & 0xff, DIR_WRITE, reg & 0xff, ...payload];
   const ck = checksum16(f, 2);
-  const mix = pinByte(pin);
-  f.push((ck & 0xff) ^ mix, ((ck >> 8) & 0xff) ^ mix);
+  const p = (pin >>> 0) & 0xffff;                     // 16-bit app code mixed into both checksum bytes
+  f.push((ck & 0xff) ^ (p & 0xff), ((ck >> 8) & 0xff) ^ ((p >> 8) & 0xff));
   return f;
 }
 function reg16LE(v){ v &= 0xffff; return [v & 0xff, (v >> 8) & 0xff]; }
@@ -71,15 +72,14 @@ function parseHex(s){ return (s.match(/[0-9a-fA-F]{2}/g) || []).map(h=>parseInt(
 // and the frame layout invariants must hold on every freshly-built frame.
 const FRAME_OK = (function(){
   const eq = (a, b) => a.length === b.length && a.every((v, i) => (v & 0xff) === (b[i] & 0xff));
-  // With PIN=0 (no mixing) the checksum is the plain one's complement sum - a reproducible vector.
-  const fr = buildFrame(OPCODE_TOUCH, REG_LIMIT_SPEED1_A, reg16LE(25000), 0);
-  // kv = header + len + opcode + reg + 2-byte LE payload + 2-byte checksum = 9 bytes total
-  if (fr.length !== 9) return false;
-  // sum from offset 2: 0x04 + 0x70 + 0xEF + 0xA8 + 0x61 = 0x26C -> ~0x026C = 0xFD93 -> LE: 93 FD
-  const kv = eq(fr, [0x55, 0xAA, 0x04, 0x70, 0xEF, 0xA8, 0x61, 0x93, 0xFD]);
-  // Round-trip with PIN=0x12 (mixing byte 0x12): both checksum bytes XOR 0x12.
-  const fr2 = buildFrame(OPCODE_TOUCH, REG_LIMIT_SPEED1_A, reg16LE(25000), 0x12);
-  const kv2 = eq(fr2, [0x55, 0xAA, 0x04, 0x70, 0xEF, 0xA8, 0x61, 0x93 ^ 0x12, 0xFD ^ 0x12]);
+  // Speed-limit write to 0xEF, value 25000 (0x61A8 -> LE A8 61), code 0: 55 AA 04 20 03 EF A8 61 CK CK.
+  const fr = buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_A, reg16LE(25000), 0);
+  if (fr.length !== 10) return false;
+  // sum from offset 2: 04+20+03+EF+A8+61 = 0x21F -> ~0x021F = 0xFDE0 -> LE: E0 FD
+  const kv = eq(fr, [0x55, 0xAA, 0x04, 0x20, 0x03, 0xEF, 0xA8, 0x61, 0xE0, 0xFD]);
+  // Code 1234 (0x04D2): checksum low XOR 0xD2, high XOR 0x04.
+  const fr2 = buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_A, reg16LE(25000), 1234);
+  const kv2 = eq(fr2, [0x55, 0xAA, 0x04, 0x20, 0x03, 0xEF, 0xA8, 0x61, 0xE0 ^ 0xD2, 0xFD ^ 0x04]);
   return kv && kv2;
 })();
 
@@ -206,8 +206,10 @@ let connected=false;
 
 function getPin(){
   const el = $('pin-in'); if (!el) return 0;
-  const v = parseInt(String(el.value || '0').replace(/\D/g,''), 10);
-  return Number.isFinite(v) ? v : 0;
+  const digits = String(el.value || '').replace(/\D/g, '');
+  if (!digits) return 0;
+  const v = parseInt(digits, 10);                       // device uses atoi(code) mod 10000 = last 4 digits
+  return Number.isFinite(v) ? (v % 10000) : 0;
 }
 
 async function sendFrame(frame){
@@ -219,8 +221,8 @@ async function sendFrame(frame){
     logTx(frame);
   }catch(e){ logErr('TX error: ' + (e && e.message ? e.message : e)); }
 }
-function writeReg(reg, value){ return sendFrame(buildFrame(OPCODE_TOUCH, reg, reg16LE(value), getPin())); }
-function writeRegNamed(name, reg, val){ writeReg(reg, val); logSys(`${name}: reg 0x${reg.toString(16)} = ${val}`); }
+function writeReg(reg, value, opcode){ return sendFrame(buildFrame(opcode || OP_WRITE_HB, reg, reg16LE(value), getPin())); }
+function writeRegNamed(name, reg, val, opcode){ writeReg(reg, val, opcode); logSys(`${name}: reg 0x${reg.toString(16)} = ${val}`); }
 
 // --------------------------- receive / telemetry ---------------------------
 // Register map derived from capstone disassembly of UserInterface::RefreshMainPage* and RefreshInfo
@@ -368,18 +370,18 @@ function wire(){
     const reg = parseInt($('speed-target').value);
     const tg = SPEED_TARGETS.find(s=>s.reg===reg) || { mul:1, add:0 };
     const raw = Math.round(kmh*tg.mul + tg.add) & 0xffff;
-    writeReg(reg, raw); logSys(`speed limit: reg 0x${reg.toString(16)} = ${kmh} km/h (raw ${raw})`);
+    writeReg(reg, raw, OP_WRITE_HB); logSys(`speed limit: reg 0x${reg.toString(16)} = ${kmh} km/h (raw ${raw})`);
   });
 
-  $('btn-lock').addEventListener('click', ()=> writeRegNamed('lock',   REG_LOCK, 1));
-  $('btn-unlock').addEventListener('click', ()=> writeRegNamed('unlock', REG_UNLOCK, 1));
+  $('btn-lock').addEventListener('click', ()=> writeRegNamed('lock',   REG_LOCK, 1, OP_WRITE));
+  $('btn-unlock').addEventListener('click', ()=> writeRegNamed('unlock', REG_UNLOCK, 1, OP_WRITE));
 
   $('btn-writereg').addEventListener('click', ()=> writeReg(parseInt($('reg-nr').value)&0xff, parseInt($('reg-val').value)&0xffff));
   $('btn-raw').addEventListener('click', ()=>{
     const bytes=parseHex($('raw-hex').value); if(bytes.length<3){ logErr('too short'); return; }
     // Append auto-checksum using current PIN mixing
-    const ck=checksum16(bytes,2); const mix=pinByte(getPin());
-    bytes.push((ck&0xff)^mix,((ck>>8)&0xff)^mix); sendFrame(bytes);
+    const ck=checksum16(bytes,2); const p=getPin()&0xffff;
+    bytes.push((ck&0xff)^(p&0xff),((ck>>8)&0xff)^((p>>8)&0xff)); sendFrame(bytes);
   });
   $('btn-raw-plain').addEventListener('click', ()=>{
     const bytes=parseHex($('raw-hex').value); if(!bytes.length) return;
@@ -392,7 +394,7 @@ function wire(){
   // PIN persistence (local only)
   { const pin = $('pin-in'); if (pin) {
       try { const saved = localStorage.getItem(LS.PIN); if (saved) pin.value = saved; } catch (e) {}
-      pin.addEventListener('change', () => { try { localStorage.setItem(LS.PIN, pin.value.replace(/\D/g,'').slice(0,4)); } catch (e) {} });
+      pin.addEventListener('change', () => { try { localStorage.setItem(LS.PIN, pin.value.replace(/\D/g,'').slice(0,6)); } catch (e) {} });
   }}
 
   $('btn-copy-log').addEventListener('click', () => navigator.clipboard.writeText(logText()).then(() => logSys('log copied')).catch(() => {}));
