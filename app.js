@@ -1,9 +1,11 @@
 'use strict';
 // Laufbursche CITYBOSS Tool - a Web Bluetooth client for the lebitec/CITYBOSS BLE protocol family.
 // Shell (header, footer, i18n, theme, doc viewer, anonymized log) matches the Laufbursche tool family;
-// the BLE protocol is the proven CITYBOSS frame engine: 55 AA LEN OPCODE DIR REG payload CK_LO CK_HI,
-// with the app code (6 digits typed, last 4 = atoi mod 10000) mixed 16-bit into the checksum (XOR).
-const BUILD = 'v5';
+// the BLE protocol is the proven CITYBOSS frame engine: HEADER LEN OPCODE DIR REG payload CK_LO CK_HI,
+// with the app code (6 digits typed, last 4 = atoi mod 10000) mixed 16-bit into the checksum (XOR). The
+// finished frame is transformed per model variant (chosen by BLE name in SetAppType): a whole-frame
+// single-byte XOR (default CITYBOSS = 0x34) and/or a 4-byte header. See CB_VARIANTS.
+const BUILD = 'v6';
 
 // =====================================================================================
 // CITYBOSS BLE protocol (ground truth - do not reinvent)
@@ -46,6 +48,34 @@ const SPEED_TARGETS = [
   { reg:REG_LIMIT_SPEED3,   mul:1000, add:5000, label:'LimitSpeed3 / Cruise (0xF3, kmh*1000+5000)' },
 ];
 
+// --------------------------- per-model frame variant (UserInterface::SetAppType @0x457264) ---------------------------
+// The scooter picks a frame variant from its BLE name: a whole-frame single-byte XOR over EVERY byte
+// (header + checksum included) and/or a 4-byte header 5A A5 <b> 3E instead of 55 AA <b+2>. Verified from
+// the native lib; first substring match wins, in SetAppType order. An unmatched name (the typical CITYBOSS
+// e-scooter) falls through to +0x1838=3 -> XOR 0x34, so the plain 55 AA frame is NOT the default.
+const CB_VARIANTS = [
+  { needle:'M6',          h4:false, xor:0x00 },
+  { needle:'MiniRobot',   h4:false, xor:0x55 },
+  { needle:'GoKart',      h4:false, xor:0x00 },
+  { needle:'N3MTenbot',   h4:false, xor:0x00 },
+  { needle:' MiniPro',    h4:false, xor:0x00 },
+  { needle:'NinebotMini', h4:false, xor:0x00 },
+  { needle:'miniPLUS_',   h4:true,  xor:0x00 },
+  { needle:'Plus',        h4:true,  xor:0x39 },
+  { needle:'M5Robot',     h4:false, xor:0xD8 },
+  { needle:'M1',          h4:false, xor:0x7A },
+  { needle:'A6',          h4:false, xor:0xD8 },
+  { needle:'M0',          h4:false, xor:0x34 },
+  { needle:'VOLTAIK',     h4:false, xor:0x34 },
+  { needle:'MIScooter',   h4:false, xor:0x00 },
+];
+const CB_VARIANT_DEFAULT = { h4:false, xor:0x34 };   // unmatched name -> +0x1838=3 -> whole-frame XOR 0x34
+function resolveVariant(name){
+  const n = String(name || '');
+  for (const v of CB_VARIANTS) if (n.indexOf(v.needle) >= 0) return v;
+  return CB_VARIANT_DEFAULT;
+}
+
 // --------------------------- frame engine ---------------------------
 // Verified from Bluetooth::SendFramePack @0x48145c: 55 AA LEN OPCODE DIR REG payload CK_LO CK_HI, with
 // LEN = payload.length + 2. Checksum = ones-complement of the 16-bit byte sum from offset 2 (LEN), then
@@ -55,13 +85,17 @@ function checksum16(bytes, from){
   let s=0; for(let i=from;i<bytes.length;i++) s=(s+bytes[i])&0xffff;
   return (~s)&0xffff;
 }
-function buildFrame(opcode, reg, payload, pin){
+function buildFrame(opcode, reg, payload, pin, variant){
   payload = payload || [];
-  const len = (payload.length + 2) & 0xff;            // device LEN field = payload bytes + 2
-  const f = [0x55, 0xAA, len, opcode & 0xff, DIR_WRITE, reg & 0xff, ...payload];
+  const v = variant || CB_VARIANT_DEFAULT;
+  const b = payload.length & 0xff;
+  const f = v.h4
+    ? [0x5A, 0xA5, b, 0x3E, opcode & 0xff, DIR_WRITE, reg & 0xff, ...payload]          // 4-byte header, LEN = b
+    : [0x55, 0xAA, (b + 2) & 0xff, opcode & 0xff, DIR_WRITE, reg & 0xff, ...payload];  // 3-byte header, LEN = b+2
   const ck = checksum16(f, 2);
   const p = (pin >>> 0) & 0xffff;                     // 16-bit app code mixed into both checksum bytes
   f.push((ck & 0xff) ^ (p & 0xff), ((ck >> 8) & 0xff) ^ ((p >> 8) & 0xff));
+  if (v.xor) for (let i = 0; i < f.length; i++) f[i] = (f[i] ^ v.xor) & 0xff;  // whole-frame XOR (header + checksum included)
   return f;
 }
 function reg16LE(v){ v &= 0xffff; return [v & 0xff, (v >> 8) & 0xff]; }
@@ -72,15 +106,21 @@ function parseHex(s){ return (s.match(/[0-9a-fA-F]{2}/g) || []).map(h=>parseInt(
 // and the frame layout invariants must hold on every freshly-built frame.
 const FRAME_OK = (function(){
   const eq = (a, b) => a.length === b.length && a.every((v, i) => (v & 0xff) === (b[i] & 0xff));
-  // Speed-limit write to 0xEF, value 25000 (0x61A8 -> LE A8 61), code 0: 55 AA 04 20 03 EF A8 61 CK CK.
-  const fr = buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_A, reg16LE(25000), 0);
-  if (fr.length !== 10) return false;
-  // sum from offset 2: 04+20+03+EF+A8+61 = 0x21F -> ~0x021F = 0xFDE0 -> LE: E0 FD
-  const kv = eq(fr, [0x55, 0xAA, 0x04, 0x20, 0x03, 0xEF, 0xA8, 0x61, 0xE0, 0xFD]);
-  // Code 1234 (0x04D2): checksum low XOR 0xD2, high XOR 0x04.
-  const fr2 = buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_A, reg16LE(25000), 1234);
-  const kv2 = eq(fr2, [0x55, 0xAA, 0x04, 0x20, 0x03, 0xEF, 0xA8, 0x61, 0xE0 ^ 0xD2, 0xFD ^ 0x04]);
-  return kv && kv2;
+  const PL = reg16LE(40);                 // speed write to 0xF0, value 40 -> payload 28 00, code 0
+  const base = { h4:false, xor:0x00 };
+  // base, no XOR: 55 AA 04 20 03 F0 28 00 C0 FE
+  if (!eq(buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_B, PL, 0, base),
+          [0x55,0xAA,0x04,0x20,0x03,0xF0,0x28,0x00,0xC0,0xFE])) return false;
+  // default CITYBOSS: the base frame with whole-frame XOR 0x34
+  if (!eq(buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_B, PL, 0, CB_VARIANT_DEFAULT),
+          [0x61,0x9E,0x30,0x14,0x37,0xC4,0x1C,0x34,0xF4,0xCA])) return false;
+  // 4-byte header + XOR 0x39 (Plus): 5A A5 02 3E 20 03 F0 28 00 84 FE then XOR 0x39
+  if (!eq(buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_B, PL, 0, { h4:true, xor:0x39 }),
+          [0x63,0x9C,0x3B,0x07,0x19,0x3A,0xC9,0x11,0x39,0xBD,0xC7])) return false;
+  // app code 1234 (0x04D2) on the base frame: checksum low XOR 0xD2, high XOR 0x04
+  if (!eq(buildFrame(OP_WRITE_HB, REG_LIMIT_SPEED1_B, PL, 1234, base),
+          [0x55,0xAA,0x04,0x20,0x03,0xF0,0x28,0x00,0xC0 ^ 0xD2,0xFE ^ 0x04])) return false;
+  return true;
 })();
 
 // --------------------------- helpers ---------------------------
@@ -203,6 +243,7 @@ function logDiagnosticHeader() {
 // =====================================================================================
 let device=null, server=null, writeChar=null, notifyChar=null, transport=null;
 let connected=false;
+let cbVariant = CB_VARIANT_DEFAULT;   // frame variant resolved from the BLE name on connect
 
 function getPin(){
   const el = $('pin-in'); if (!el) return 0;
@@ -221,7 +262,7 @@ async function sendFrame(frame){
     logTx(frame);
   }catch(e){ logErr('TX error: ' + (e && e.message ? e.message : e)); }
 }
-function writeReg(reg, value, opcode){ return sendFrame(buildFrame(opcode || OP_WRITE_HB, reg, reg16LE(value), getPin())); }
+function writeReg(reg, value, opcode){ return sendFrame(buildFrame(opcode || OP_WRITE_HB, reg, reg16LE(value), getPin(), cbVariant)); }
 function writeRegNamed(name, reg, val, opcode){ writeReg(reg, val, opcode); logSys(`${name}: reg 0x${reg.toString(16)} = ${val}`); }
 
 // --------------------------- receive / telemetry ---------------------------
@@ -278,10 +319,12 @@ function boolState(b){ return b[0] ? '1' : '0'; }
 function setTile(id, text){ const el = $(id); if(!el) return; el.textContent = (text == null ? '-' : String(text)); }
 function onNotify(ev){
   const v = new Uint8Array(ev.target.value.buffer);
-  const b = Array.from(v);
-  logRx(b);
-  // Frame: 55 AA LEN OP REG payload CK_LO CK_HI  (OP = 0x70 TR_TOUCH echo)
-  if (b.length < 7 || b[0] !== 0x55 || b[1] !== 0xAA) return;
+  let b = Array.from(v);
+  logRx(b);                                                     // log the raw on-wire bytes
+  if (cbVariant.xor) b = b.map(x => (x ^ cbVariant.xor) & 0xff); // undo the model's whole-frame XOR first
+  // After de-XOR: 55 AA ... (3-byte header) or 5A A5 ... 3E (4-byte). The reg/payload offsets below are the
+  // classic layout, not yet re-verified against the variant frames - telemetry only, never the writes.
+  if (b.length < 7 || !((b[0] === 0x55 && b[1] === 0xAA) || (b[0] === 0x5A && b[1] === 0xA5))) return;
   const len = b[2];
   if (b.length < 4 + len + 2) return;
   const reg = b[4];
@@ -310,6 +353,8 @@ async function connect(){
     device = await navigator.bluetooth.requestDevice(req);
     device.addEventListener('gattserverdisconnected', onDisc);
     logSys('device: \x01' + (device.name || '(no name)') + '\x01');
+    cbVariant = resolveVariant(device.name);
+    logSys('frame variant: ' + (cbVariant.h4 ? '4-byte header' : '3-byte header') + ', XOR ' + (cbVariant.xor ? '0x' + cbVariant.xor.toString(16).toUpperCase().padStart(2,'0') : 'none'));
     setStatus('linking');
     server = await device.gatt.connect();
     transport = null;
@@ -334,7 +379,7 @@ async function connect(){
   }catch(e){ logErr('connect aborted: ' + (e && e.message ? e.message : e)); setStatus('disconnected'); }
 }
 async function disconnect(){ try{ if(device && device.gatt.connected) device.gatt.disconnect(); }catch(e){} onDisc(); }
-function onDisc(){ connected=false; writeChar=null; notifyChar=null; transport=null;
+function onDisc(){ connected=false; writeChar=null; notifyChar=null; transport=null; cbVariant=CB_VARIANT_DEFAULT;
   setStatus('disconnected'); setControlsEnabled(false); revealInteractive(false);
   const el = $('devinfo'); if (el) el.textContent = ''; logSys('disconnected'); }
 
@@ -381,7 +426,9 @@ function wire(){
     const bytes=parseHex($('raw-hex').value); if(bytes.length<3){ logErr('too short'); return; }
     // Append auto-checksum using current PIN mixing
     const ck=checksum16(bytes,2); const p=getPin()&0xffff;
-    bytes.push((ck&0xff)^(p&0xff),((ck>>8)&0xff)^((p>>8)&0xff)); sendFrame(bytes);
+    bytes.push((ck&0xff)^(p&0xff),((ck>>8)&0xff)^((p>>8)&0xff));
+    if(cbVariant.xor) for(let i=0;i<bytes.length;i++) bytes[i]=(bytes[i]^cbVariant.xor)&0xff;  // match the model's whole-frame XOR
+    sendFrame(bytes);
   });
   $('btn-raw-plain').addEventListener('click', ()=>{
     const bytes=parseHex($('raw-hex').value); if(!bytes.length) return;
