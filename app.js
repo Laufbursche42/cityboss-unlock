@@ -5,7 +5,7 @@
 // with the app code (6 digits typed, last 4 = atoi mod 10000) mixed 16-bit into the checksum (XOR). The
 // finished frame is transformed per model variant (chosen by BLE name in SetAppType): a whole-frame
 // single-byte XOR (default CITYBOSS = 0x34) and/or a 4-byte header. See CB_VARIANTS.
-const BUILD = 'v6';
+const BUILD = 'v7';
 
 // =====================================================================================
 // CITYBOSS BLE protocol (ground truth - do not reinvent)
